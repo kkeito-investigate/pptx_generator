@@ -30,6 +30,7 @@ from pptx_generator.models import (
 from pptx_generator.pipeline.base import PipelineContext
 from pptx_generator.pipeline.mapping import MappingOptions, MappingStep
 from pptx_generator.pipeline.mapping.processor import MappingSlideProcessor
+from pptx_generator.pipeline.mapping.types import LayoutProfile
 from pptx_generator.prepare import (
     PrepareBodyBlock,
     PrepareCard,
@@ -242,7 +243,7 @@ def test_mapping_step_applies_fallback_when_body_overflow(tmp_path: Path) -> Non
 
     generate_ready_payload = json.loads(generate_ready_path.read_text(encoding="utf-8"))
     body = generate_ready_payload["slides"][0]["elements"]["body"]
-    assert body == ["1行目", "2行目", "3行目"], "オーバーフロー時でも本文は維持されること"
+    assert body == ["1行目", "2行目..."], "オーバーフロー時は本文を短縮すること"
     assert generate_ready_payload["slides"][0]["meta"]["fallback"] == "none"
     assert generate_ready_payload["meta"]["template_path"] == template_path.name
 
@@ -255,7 +256,7 @@ def test_mapping_step_applies_fallback_when_body_overflow(tmp_path: Path) -> Non
     assert mapping_payload["meta"]["ai_patch_count"] == 0
     assert mapping_payload["meta"]["analyzer_issue_count"] == 0
     assert slide_log["warnings"] == [
-        "body が許容行数 2 を超過しています（現在 3 行）"
+        "body が許容行数 2 を超過していたため 2 行に短縮しました（元 3 行）"
     ]
 
     assert not fallback_report_path.exists()
@@ -345,6 +346,45 @@ def test_mapping_step_assigns_table_anchor(tmp_path: Path) -> None:
     assert "Body Right" in slide_elements
     assert slide_elements["Body Right"]["rows"] == [["120件/月"]]
     assert "table" not in slide_elements
+
+
+def test_mapping_capacity_controls_warn_on_empty_body(tmp_path: Path) -> None:
+    processor = MappingSlideProcessor(
+        options=MappingOptions(output_dir=tmp_path),
+        layout_catalog={},
+    )
+    layout = LayoutProfile(
+        layout_id="layout_basic",
+        layout_name="Basic",
+        usage_tags=(),
+        text_hint={"max_lines": 2},
+        media_hint={},
+    )
+    elements = {"body": []}
+
+    fallback, ai_patches, warnings = processor._apply_capacity_controls(
+        slide_id="s01",
+        layout=layout,
+        elements=elements,
+    )
+
+    assert fallback.applied is False
+    assert ai_patches == []
+    assert warnings == ["body が空です"]
+    assert elements["body"] == []
+
+
+def test_mapping_capacity_controls_helpers() -> None:
+    trimmed, changed = MappingSlideProcessor._trim_body_lines(["本文"], 0)
+    assert trimmed == []
+    assert changed is True
+
+    trimmed, changed = MappingSlideProcessor._trim_body_lines(["本文"], 2)
+    assert trimmed == ["本文"]
+    assert changed is False
+
+    assert MappingSlideProcessor._append_ellipsis("") == "..."
+    assert MappingSlideProcessor._append_ellipsis("本文...") == "本文..."
 
 
 def test_mapping_step_errors_on_invalid_content_artifact(tmp_path: Path, caplog) -> None:

@@ -390,15 +390,41 @@ class MappingSlideProcessor:
 
         max_lines = layout.max_lines()
         body = elements.get("body")
-        if max_lines is not None and isinstance(body, list) and len(body) > max_lines:
-            warnings.append(
-                f"body が許容行数 {max_lines} を超過しています（現在 {len(body)} 行）"
-            )
-
-        if isinstance(body, list) and not body:
-            warnings.append("body が空です")
+        if isinstance(body, list):
+            if max_lines is not None and len(body) > max_lines:
+                trimmed_body, trimmed = self._trim_body_lines(body, max_lines)
+                if trimmed:
+                    elements["body"] = trimmed_body
+                    warnings.append(
+                        "body が許容行数 {max} を超過していたため {max} 行に短縮しました（元 {actual} 行）".format(
+                            max=max_lines,
+                            actual=len(body),
+                        )
+                    )
+            if not body:
+                warnings.append("body が空です")
 
         return fallback, ai_patches, warnings
+
+    @staticmethod
+    def _trim_body_lines(body: list[str], max_lines: int) -> tuple[list[str], bool]:
+        if max_lines <= 0:
+            return ([], bool(body))
+        if len(body) <= max_lines:
+            return (list(body), False)
+        trimmed = list(body[:max_lines])
+        if trimmed:
+            trimmed[-1] = MappingSlideProcessor._append_ellipsis(trimmed[-1])
+        return (trimmed, True)
+
+    @staticmethod
+    def _append_ellipsis(text: str) -> str:
+        stripped = text.rstrip()
+        if not stripped:
+            return "..."
+        if stripped.endswith("..."):
+            return stripped
+        return f"{stripped}..."
 
     @staticmethod
     def _build_auto_draw_payload(spec_slide: Slide | None) -> list[dict[str, float]]:
