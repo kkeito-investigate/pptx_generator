@@ -10,6 +10,7 @@ from ...models import (
     DraftSlideCard,
     GenerateReadySlide,
     MappingAIPatch,
+    MappingLogCapacityWarning,
     MappingCandidate,
     MappingFallbackState,
     MappingLogSlide,
@@ -71,7 +72,7 @@ class MappingSlideProcessor:
                     payload=table_payload,
                 )
 
-        fallback_state, ai_patches, warnings = self._apply_capacity_controls(
+        fallback_state, ai_patches, warnings, capacity_warnings = self._apply_capacity_controls(
             slide_id=slide_id,
             layout=selected_profile,
             elements=elements,
@@ -115,6 +116,7 @@ class MappingSlideProcessor:
                 fallback=fallback_state,
                 ai_patch=ai_patches,
                 warnings=warnings,
+                capacity_warnings=capacity_warnings,
                 layout_description=layout_description,
             )
         )
@@ -380,31 +382,47 @@ class MappingSlideProcessor:
         slide_id: str,
         layout: LayoutProfile | None,
         elements: dict[str, Any],
-    ) -> tuple[MappingFallbackState, list[MappingAIPatch], list[str]]:
+    ) -> tuple[
+        MappingFallbackState,
+        list[MappingAIPatch],
+        list[str],
+        list[MappingLogCapacityWarning],
+    ]:
         fallback = MappingFallbackState()
         ai_patches: list[MappingAIPatch] = []
         warnings: list[str] = []
+        capacity_warnings: list[MappingLogCapacityWarning] = []
 
         if layout is None:
-            return fallback, ai_patches, warnings
+            return fallback, ai_patches, warnings, capacity_warnings
 
         max_lines = layout.max_lines()
         body = elements.get("body")
         if isinstance(body, list):
             if max_lines is not None and len(body) > max_lines:
+                actual_lines = len(body)
                 trimmed_body, trimmed = self._trim_body_lines(body, max_lines)
                 if trimmed:
                     elements["body"] = trimmed_body
                     warnings.append(
                         "body が許容行数 {max} を超過していたため {max} 行に短縮しました（元 {actual} 行）".format(
                             max=max_lines,
-                            actual=len(body),
+                            actual=actual_lines,
                         )
                     )
+                capacity_warnings.append(
+                    MappingLogCapacityWarning(
+                        slide_id=slide_id,
+                        element="body",
+                        max_lines=max_lines,
+                        actual_lines=actual_lines,
+                        layout_id=layout.layout_id,
+                    )
+                )
             if not body:
                 warnings.append("body が空です")
 
-        return fallback, ai_patches, warnings
+        return fallback, ai_patches, warnings, capacity_warnings
 
     @staticmethod
     def _trim_body_lines(body: list[str], max_lines: int) -> tuple[list[str], bool]:

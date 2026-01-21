@@ -1210,3 +1210,17 @@ flowchart TB
   - PPTX からスライド単位の PNG を生成する CLI/API パスを用意（バッチ/単一スライド両対応）。
   - 画像と slide_snapshot の対応を維持し、LLM 入力で shape_id と紐づく座標参照が可能なメタ情報を出力する。
   - 既存 Stage4 生成成果物に追加の生成物（スクリーンショット＋メタ）を付与し、Stage5 で再利用できるようにする。
+
+<a id="rm-098"></a>
+### RM-098 改行・空行の保持
+- ゴール: HTML/Markdown/AI 応答の改行・空行を入力から出力まで保持する
+- 対象 stage: 2/3/4（prepare / mapping / rendering）
+- 参照ドキュメント: `docs/requirements/requirements.md`、`docs/requirements/stages/stage-02-prepare.md`、`docs/requirements/stages/stage-03-compose.md`、`docs/requirements/stages/stage-04-gen.md`
+- 参照 ToDo: [docs/todo/20260109-rm098-linebreak-preservation.md](../todo/20260109-rm098-linebreak-preservation.md)
+- 依頼: なし
+- 状況: 進行中（2026-01-09 更新）
+- 期待成果:
+  - HTML/Markdown/AI の改行・空行を正規化して保持
+  - Prepare/Mapping の中間 JSON に空行を落とさず反映
+  - Rendering で空行を点なし表示で出力
+
