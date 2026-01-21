@@ -371,7 +371,7 @@ def test_mapping_capacity_controls_warn_on_empty_body(tmp_path: Path) -> None:
     )
     elements = {"body": []}
 
-    fallback, ai_patches, warnings = processor._apply_capacity_controls(
+    fallback, ai_patches, warnings, capacity_warnings = processor._apply_capacity_controls(
         slide_id="s01",
         layout=layout,
         elements=elements,
@@ -380,6 +380,7 @@ def test_mapping_capacity_controls_warn_on_empty_body(tmp_path: Path) -> None:
     assert fallback.applied is False
     assert ai_patches == []
     assert warnings == ["body が空です"]
+    assert capacity_warnings == []
     assert elements["body"] == []
 
 
