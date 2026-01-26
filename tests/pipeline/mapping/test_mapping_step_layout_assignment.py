@@ -98,6 +98,54 @@ def test_merge_layout_candidates_prefers_card_score(tmp_path: Path) -> None:
     assert merged[1].score == 0.5
 
 
+def test_mapping_step_accepts_layout_name_alias(tmp_path: Path, caplog) -> None:
+    payload = {
+        "meta": {
+            "schema_version": "1.0",
+            "title": "テスト資料",
+            "locale": "ja-JP",
+        },
+        "auth": {"created_by": "tester"},
+        "slides": [
+            {
+                "id": "s01",
+                "layout": "Two Column Detail",
+                "title": "概要",
+                "bullets": [{"items": [{"id": "b1", "text": "本文", "level": 0}]}],
+            }
+        ],
+    }
+    spec = JobSpec.model_validate(payload)
+    context = PipelineContext(spec=spec, workdir=tmp_path)
+    _attach_minimal_draft_document(context, spec)
+
+    layouts_path = tmp_path / "layouts.jsonl"
+    layouts_path.write_text(
+        json.dumps(
+            {
+                "layout_id": "two_column_detail",
+                "layout_name": "Two Column Detail",
+                "usage_tags": ["content"],
+                "text_hint": {"max_lines": 4},
+                "media_hint": {"allow_table": False},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    step = MappingStep(MappingOptions(output_dir=tmp_path, layouts_path=layouts_path))
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="pptx_generator.pipeline.mapping"):
+        step.run(context)
+
+    assert not any(
+        "layouts.jsonl に一致するレイアウトが見つかりませんでした" in record.message
+        for record in caplog.records
+    )
+
+
 def test_mapping_step_generates_generate_ready_outputs(tmp_path: Path) -> None:
     spec = _build_spec(["最初のポイント", "次のステップ"])
     context = PipelineContext(spec=spec, workdir=tmp_path)
@@ -256,6 +304,15 @@ def test_mapping_step_applies_fallback_when_body_overflow(tmp_path: Path) -> Non
     assert mapping_payload["meta"]["analyzer_issue_count"] == 0
     assert slide_log["warnings"] == [
         "body が許容行数 2 を超過しています（現在 3 行）"
+    ]
+    assert slide_log["capacity_warnings"] == [
+        {
+            "slide_id": "s01",
+            "element": "body",
+            "max_lines": 2,
+            "actual_lines": 3,
+            "layout_id": "layout_basic",
+        }
     ]
 
     assert not fallback_report_path.exists()
