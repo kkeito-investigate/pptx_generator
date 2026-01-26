@@ -35,6 +35,10 @@ roadmap_item: RM-054 静的テンプレ構成統合プランニング
       - `RUST_BACKTRACE=1 UV_LOG=debug UV_CACHE_DIR=.pptx/uv-cache uv run --extra dev pytest tests/pipeline/compose/test_draft_structuring_step.py`
       - `RUST_BACKTRACE=full UV_LOG=debug UV_CACHE_DIR=.pptx/uv-cache uv run --extra dev pytest tests/pipeline/compose/test_draft_structuring_step.py`
         - 結果: uv が system-configuration で panic し中断（Attempted to create a NULL object）
+      - `RUST_BACKTRACE=full UV_LOG=debug UV_CACHE_DIR=.pptx/uv-cache uv run --extra dev pytest tests/pipeline/compose/test_draft_structuring_step.py`（require_escalated）
+        - 結果: 18 passed / coverage.xml 生成
+      - `uv tool run diff-cover coverage.xml --compare-branch upstream/main`
+        - 結果: Diff coverage 100%（WARN は旧eggスキップ）
     - ユーザー経路の手動確認: 実施（static, stage1-4）
       - stage1 template:
         - `PYTHONPATH=/Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/rm060 /Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/rm060/.venv/bin/python -m pptx_generator.cli template samples/templates/templates.pptx --mode static --layout "One Column Detail" --output .pptx/uat-rm060/template-static-small --disable-template-ai`
@@ -68,6 +72,6 @@ roadmap_item: RM-054 静的テンプレ構成統合プランニング
   - 前提/制約: static モードの image slot が空だと empty_placeholder 警告が出る。
   - 決定と理由: ref が anchor と一致する場合は画像扱いせずテキストへフォールバックする。
   - リスク(UNCONFIRMED): 画像プレースホルダーがテキストで埋まる可能性。
-  - Now/Next: stage1-4 静的UAT完了。次は uv panic 解消 or 代替策の合意と CI/レビュー待ち。
-  - テスト実績/抜け: pytest は uv panic で中断（system-configuration）。静的UATは warnings 0 を確認。
+  - Now/Next: stage1-4 静的UAT完了。pytest/coverage/diff-cover 実施済み。次は CI/レビュー待ち。
+  - テスト実績/抜け: require_escalated で pytest 成功。静的UATは warnings 0 を確認。
 - 計画のみで完了とする場合は、判断者・判断日と次のアクション条件をここに記載する。
