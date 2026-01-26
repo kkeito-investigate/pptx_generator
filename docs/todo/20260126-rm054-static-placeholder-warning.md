@@ -11,14 +11,14 @@ roadmap_item: RM-054 静的テンプレ構成統合プランニング
     - 2026-01-26: fix/rm054-static-placeholder-warning を作成。初期コミット=1dbbd06。push済み。
 - [x] 計画策定（スコープ・前提の整理）
   - メモ: 承認済み Plan をそのまま転記する。以下の項目を含めること。
-    - 対象整理（スコープ、対象ファイル、前提）: static compose の image slot が空になる問題を解消。対象は draft_structuring/slide_elements.py の assign_slot_to_elements と compose テスト。
+    - 対象整理（スコープ、対象ファイル、前提）: static compose の image slot が空になる問題を解消。対象は draft_structuring/slide_elements.py の assign_slot_to_elements と compose テスト。追加で static の全stage UAT、uv panic 原因分析、カバレッジ確認を実施。
     - ドキュメント／コード修正方針: content_type=image で image source が無い場合は text へフォールバック。source があれば image payload を生成。
     - 確認・共有方法（レビュー、ToDo 更新など）: ToDo に実装・テスト・UAT結果を記録し、PR本文に動作確認を記載。
     - 想定影響ファイル: slide_elements.py, tests/pipeline/compose/test_draft_structuring_step.py
     - リスク: 画像プレースホルダーにテキストが入る可能性（警告抑止が目的）。
-    - テスト方針: pytestで該当テスト実施。静的UATで rendering_log の警告数確認。
+    - テスト方針: pytestで該当テスト実施。coverage.xml を生成し diff-cover を実行。静的UATで rendering_log の警告数確認（stage1-4）。
     - ロールバック方法: image slot のフォールバック処理とテストを元に戻す。
-    - 承認メッセージ ID／リンク: 2026-01-26 ユーザー承認「おなしゃす」
+    - 承認メッセージ ID／リンク: 2026-01-26 ユーザー承認「おなしゃす」 / 追加対応承認「OK」
 - [x] 設計・実装方針の確定
   - メモ: Plan 承認内容を踏まえた設計・実装方針をここに記載し、ユーザー確認が必要な論点があれば列挙する。
     - image slot は ref が anchor と一致する場合は画像扱いせずテキストへフォールバックする。
@@ -30,13 +30,24 @@ roadmap_item: RM-054 静的テンプレ構成統合プランニング
 - [x] テスト・検証
   - メモ: 以下を簡潔に記載する
     - 自動テスト:
-      - `UV_CACHE_DIR=.pptx/uv-cache uv run --extra dev pytest tests/pipeline/compose/test_draft_structuring_step.py`
-        - 結果: uv が system-configuration で panic し中断
-    - ユーザー経路の手動確認: 実施（static）
-      - `PYTHONPATH=/Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/rm060/src /Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/pptx_generator/.venv/bin/python -m pptx_generator.cli compose .pptx/uat-rm060/template-static-small/jobspec.json --prepare-cards .pptx/uat-rm060/prepare-static/prepare_card.json --output .pptx/uat-rm060/compose-static`
-      - `PYTHONPATH=/Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/rm060/src /Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/pptx_generator/.venv/bin/python -m pptx_generator.cli gen .pptx/uat-rm060/compose-static/generate_ready.json --output .pptx/uat-rm060/gen-static`
-      - 結果: Rendering warnings 0 / Monitoring alerts 0
-    - 生成物の確認: `.pptx/uat-rm060/gen-static/rendering_log.json` を確認
+      - `uv self update`
+        - 結果: 最新版 (v0.9.26)
+      - `RUST_BACKTRACE=1 UV_LOG=debug UV_CACHE_DIR=.pptx/uv-cache uv run --extra dev pytest tests/pipeline/compose/test_draft_structuring_step.py`
+      - `RUST_BACKTRACE=full UV_LOG=debug UV_CACHE_DIR=.pptx/uv-cache uv run --extra dev pytest tests/pipeline/compose/test_draft_structuring_step.py`
+        - 結果: uv が system-configuration で panic し中断（Attempted to create a NULL object）
+    - ユーザー経路の手動確認: 実施（static, stage1-4）
+      - stage1 template:
+        - `PYTHONPATH=/Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/rm060 /Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/rm060/.venv/bin/python -m pptx_generator.cli template samples/templates/templates.pptx --mode static --layout "One Column Detail" --output .pptx/uat-rm060/template-static-small --disable-template-ai`
+        - 結果: 出力 `.pptx/uat-rm060/template-static-small` / slide_inputs 生成
+      - stage2 prepare:
+        - `source /Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/env.local.zsh`
+        - `PPTX_LLM_PROVIDER=aws-claude PYTHONPATH=/Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/rm060 /Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/rm060/.venv/bin/python -m pptx_generator.cli prepare samples/input/bullet_only.md --mode static --jobspec .pptx/uat-rm060/template-static-small/jobspec.json --output .pptx/uat-rm060/prepare-static`
+      - stage3 compose:
+        - `PYTHONPATH=/Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/rm060 /Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/rm060/.venv/bin/python -m pptx_generator.cli compose .pptx/uat-rm060/template-static-small/jobspec.json --prepare-cards .pptx/uat-rm060/prepare-static/prepare_card.json --output .pptx/uat-rm060/compose-static`
+      - stage4 gen:
+        - `PYTHONPATH=/Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/rm060 /Users/keitokimura/work/generativeAI/20260121-llmcoe-backend/rm060/.venv/bin/python -m pptx_generator.cli gen .pptx/uat-rm060/compose-static/generate_ready.json --output .pptx/uat-rm060/gen-static`
+        - 結果: Rendering warnings 0 / Monitoring alerts 0
+    - 生成物の確認: `.pptx/uat-rm060/gen-static/rendering_log.json`, `.pptx/uat-rm060/gen-static/monitoring_report.json` を確認
 - [x] ドキュメント更新
   - メモ: 結果と影響範囲を整理し、迷う点は必ずユーザーへ相談した結果を残す
   - メモ: 変更不要の場合も必ず理由をメモに記録して `[x]` を付ける
@@ -57,6 +68,6 @@ roadmap_item: RM-054 静的テンプレ構成統合プランニング
   - 前提/制約: static モードの image slot が空だと empty_placeholder 警告が出る。
   - 決定と理由: ref が anchor と一致する場合は画像扱いせずテキストへフォールバックする。
   - リスク(UNCONFIRMED): 画像プレースホルダーがテキストで埋まる可能性。
-  - Now/Next: PR作成済み。次はレビュー待ち。
-  - テスト実績/抜け: pytest は uv panic で中断。静的UATは warnings 0 を確認。
+  - Now/Next: stage1-4 静的UAT完了。次は uv panic 解消 or 代替策の合意と CI/レビュー待ち。
+  - テスト実績/抜け: pytest は uv panic で中断（system-configuration）。静的UATは warnings 0 を確認。
 - 計画のみで完了とする場合は、判断者・判断日と次のアクション条件をここに記載する。
