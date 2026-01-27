@@ -50,7 +50,7 @@ roadmap_item: RM-095 Stage5 PPTX 編集反映
 - [ ] チェックリスト整合確認
   - メモ: 子タスクをすべて完了した親タスクが未チェックになっていないか確認し、必要に応じて `[x]` へ更新する。親タスクのメモに完了内容を残す。
 - [ ] PR 作成
-  - メモ: PR #561 https://github.com/yurake/pptx_generator/pull/561
+  - メモ: PR #562 https://github.com/yurake/pptx_generator/pull/562
 
 ## メモ
 - 連続性メモ（短文化し、更新があれば上書きする）※設計確定・実装完了・テスト完了・PR作成前後など状態変化のたびに更新
