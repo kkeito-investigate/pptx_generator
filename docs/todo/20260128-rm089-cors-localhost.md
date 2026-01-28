@@ -43,7 +43,7 @@ roadmap_item: RM-089 stage1-4 Flask Web/API 化
     - 生成物の確認があれば、その方法と結果: coverage.xml を出力
 - [x] ドキュメント更新
   - メモ: 結果と影響範囲を整理し、迷う点は必ずユーザーへ相談した結果を残す
-  - メモ: 変更不要の場合も必ず理由をメモに記録して `[x]` を付ける
+  - メモ: `.env.example` に `PPTX_API_CORS_ORIGINS` を追記（ユーザー承認 2026-01-28）。
   - [x] docs/roadmap 配下（変更不要: RM-089 の更新なし）
   - [x] docs/requirements 配下（変更不要: 要件変更なし）
   - [x] docs/design 配下（変更反映: `docs/design/api/flask.md` の CORS 設定）
