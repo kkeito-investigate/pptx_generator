@@ -7,7 +7,7 @@ import pytest
 from pptx_generator.models import (JobAuth, JobMeta, MappingSlideMeta,
                                    GenerateReadyDocument,
                                    GenerateReadyMeta, GenerateReadySlide)
-from pptx_generator.generate_ready import generate_ready_to_jobspec
+from pptx_generator.pipeline.generate_ready import generate_ready_to_jobspec
 
 
 def test_generate_ready_to_jobspec_conversion() -> None:
@@ -129,6 +129,37 @@ def test_generate_ready_to_jobspec_defaults() -> None:
     slide = spec.slides[0]
     assert slide.id == "slide-1"
     assert slide.layout == "layout_basic"
+
+
+def test_generate_ready_to_jobspec_preserves_blank_lines() -> None:
+    document = GenerateReadyDocument(
+        slides=[
+            GenerateReadySlide(
+                layout_id="layout_basic",
+                layout_name="Layout Basic",
+                elements={"body": ["Line 1", "", "Line 2"]},
+                meta=MappingSlideMeta(
+                    section=None,
+                    page_no=1,
+                    sources=["slide-1"],
+                    fallback="none",
+                ),
+            )
+        ],
+        meta=GenerateReadyMeta(
+            template_version=None,
+            content_hash=None,
+            generated_at="2025-10-18T00:00:00Z",
+            job_meta=None,
+            job_auth=None,
+        ),
+    )
+
+    spec = generate_ready_to_jobspec(document)
+
+    slide = spec.slides[0]
+    body_group = next(group for group in slide.bullets if group.anchor is None)
+    assert [bullet.text for bullet in body_group.items] == ["Line 1", "", "Line 2"]
 
 
 def test_generate_ready_to_jobspec_respects_auto_draw() -> None:

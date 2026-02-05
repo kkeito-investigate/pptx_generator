@@ -7,7 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
-from ...draft_intel import load_analysis_summary
+from ...draft.draft_intel import load_analysis_summary
 from ...prepare.models import PrepareDocument, PrepareGenerationMeta
 from ...models import (
     ContentApprovalDocument,
@@ -17,7 +17,7 @@ from ...models import (
 )
 from ..base import PipelineContext
 from ..slide_alignment import SlideIdAligner, SlideIdAlignerOptions
-from ...draft_recommender import CardLayoutRecommender, CardLayoutRecommenderConfig, LayoutProfile
+from ...draft.draft_recommender import CardLayoutRecommender, CardLayoutRecommenderConfig, LayoutProfile
 from ...settings.ai_policy import resolve_layout_ai_policy_path
 from ...api.draft_store import BoardAlreadyExistsError, DraftStore
 from .errors import DraftStructuringError
@@ -164,11 +164,15 @@ def persist_dynamic_outputs(
     step._write_json(mapping_log_path, mapping_logs)  # type: ignore[attr-defined]
 
     template_path_value = resolve_template_path(step, context)
+    prepare_document = context.artifacts.get("prepare_document")
+    if not isinstance(prepare_document, PrepareDocument):
+        prepare_document = None
     generate_ready = build_generate_ready_document(
         step=step,
         spec=context.spec,
         draft=draft,
         content_document=content_document,
+        prepare_document=prepare_document,
         template_path=template_path_value,
     )
 
@@ -181,6 +185,7 @@ def persist_dynamic_outputs(
         draft=draft,
         generate_ready=generate_ready,
         ai_summary=ai_summary,
+        alignment_payload=_build_alignment_payload(step, context),
     )
     ready_meta_path = output_dir / step.options.generate_ready_meta_filename
     step._write_json(ready_meta_path, ready_meta_payload)  # type: ignore[attr-defined]
@@ -222,3 +227,22 @@ def resolve_template_path(
     if spec_source_path is not None:
         return (spec_source_path.parent / candidate).resolve()
     return candidate.resolve()
+
+
+def _build_alignment_payload(
+    step: DraftStructuringStep,
+    context: PipelineContext,
+) -> dict[str, Any] | None:
+    if not step.options.enable_slide_alignment:
+        return {"meta": {"status": "disabled"}}
+
+    meta = context.artifacts.get("content_alignment_meta")
+    records = context.artifacts.get("content_alignment_records")
+    payload: dict[str, Any] = {}
+
+    if isinstance(meta, dict):
+        payload["meta"] = meta
+    if isinstance(records, list):
+        payload["records"] = records
+
+    return payload or None

@@ -17,7 +17,12 @@ from ...models import (
     PipelineFallbackError,
     TemplateStyle,
 )
+from ...prepare.models import PrepareDocument, PrepareCard
 from .catalog import load_layout_catalog
+from .llm_fit import (
+    MappingTextFitClientConfigurationError,
+    create_mapping_text_fit_client,
+)
 from .outputs import (
     finalize_outputs,
     format_template_path,
@@ -71,6 +76,10 @@ class MappingStep:
             if content_document is not None
             else {}
         )
+        prepare_lookup: dict[str, PrepareCard] | None = None
+        prepare_document = context.artifacts.get("prepare_document")
+        if isinstance(prepare_document, PrepareDocument):
+            prepare_lookup = {card.card_id: card for card in prepare_document.cards}
         spec_lookup = {slide.id: slide for slide in context.spec.slides}
 
         work_items = build_work_items(
@@ -83,9 +92,19 @@ class MappingStep:
         )
 
         accumulator = MappingAccumulator()
+        text_fit_client = None
+        text_fit_error: str | None = None
+        try:
+            text_fit_client = create_mapping_text_fit_client()
+        except MappingTextFitClientConfigurationError as exc:
+            text_fit_error = str(exc)
+            logger.warning("mapping text fit client unavailable: %s", exc)
         processor = MappingSlideProcessor(
             options=self.options,
             layout_catalog=layout_catalog,
+            prepare_lookup=prepare_lookup,
+            text_fit_client=text_fit_client,
+            text_fit_error=text_fit_error,
         )
 
         previous_layout: str | None = None

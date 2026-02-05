@@ -24,6 +24,35 @@ def client():
     return app.test_client()
 
 
+def test_healthcheck_without_auth(client):
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "ok"}
+
+
+def test_healthcheck_ignores_auth(client):
+    resp = client.get("/health", headers={"Authorization": "Bearer token-123"})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "ok"}
+
+
+def test_healthcheck_path_variations(client):
+    resp = client.get("/health?foo=bar", headers={"Authorization": "Bearer invalid-token"})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "ok"}
+
+    resp_trailing = client.get("/health/", headers={"Authorization": "Bearer invalid-token"})
+    # trailing slash は別ルート扱いとなり認証対象
+    assert resp_trailing.status_code == 401
+    assert resp_trailing.get_json()["code"] == "unauthorized"
+
+
+def test_templates_still_require_auth(client):
+    resp = client.post("/templates", json={"template_path": "x", "mode": "static"}, headers={"Authorization": "Bearer wrong"})
+    assert resp.status_code == 401
+    assert resp.get_json()["code"] == "unauthorized"
+
+
 def test_request_id_logging_truncated(client, caplog):
     rid = "req-1234567890"
     api_logger = logging.getLogger("pptx_generator.api.flask_app")
@@ -774,6 +803,24 @@ def test_output_root_default(monkeypatch, tmp_path):
     assert "PPTX_OUTPUT_ROOT" in str(exc.value)
 
 
+def test_cors_allows_localhost_origin(monkeypatch, tmp_path):
+    monkeypatch.setenv("PPTX_OUTPUT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PPTX_API_BEARER_TOKEN", "token-123")
+    app = create_app()
+    c = app.test_client()
+
+    resp = c.open(
+        "/health",
+        method="OPTIONS",
+        headers={
+            "Origin": "http://localhost:4200",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp.status_code in (200, 204)
+    assert resp.headers.get("Access-Control-Allow-Origin") == "http://localhost:4200"
+
+
 def test_edit_job_submission(monkeypatch, tmp_path):
     monkeypatch.setenv("PPTX_LLM_PROVIDER", "mock")
     monkeypatch.setenv("PPTX_OUTPUT_ROOT", str(tmp_path))
@@ -936,6 +983,125 @@ def test_edit_rejects_both_pptx_and_upload(monkeypatch, tmp_path):
             "/edit",
             headers=headers,
             data={"pptx_path": "samples/templates/edit_sample.pptx", "file": (f, "edit_sample.pptx")},
+            content_type="multipart/form-data",
+        )
+    assert resp.status_code == 422
+
+
+def test_edit_accepts_upload(monkeypatch, tmp_path):
+    monkeypatch.setenv("PPTX_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("PPTX_OUTPUT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PPTX_API_BEARER_TOKEN", "token-123")
+    app = create_app()
+    c = app.test_client()
+    headers = {"Authorization": "Bearer token-123"}
+
+    with open("samples/templates/edit_sample.pptx", "rb") as f:
+        resp = c.post(
+            "/edit",
+            headers=headers,
+            data={"file": (f, "edit_sample.pptx")},
+            content_type="multipart/form-data",
+        )
+    assert resp.status_code == 202
+    job = resp.get_json()
+    assert job["stage"] == "edit"
+
+    status_body = {}
+    for _ in range(10):
+        status_resp = c.get(job["status_url"], headers=headers)
+        assert status_resp.status_code == 200
+        status_body = status_resp.get_json()
+        if status_body["status"] not in ("pending", "running"):
+            break
+        time.sleep(0.05)
+    assert status_body["status"] == "succeeded"
+    assert "pptx_url" in status_body["artifacts"]
+
+
+def test_edit_accepts_upload_with_edits_json_string(monkeypatch, tmp_path):
+    monkeypatch.setenv("PPTX_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("PPTX_OUTPUT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PPTX_API_BEARER_TOKEN", "token-123")
+    app = create_app()
+    c = app.test_client()
+    headers = {"Authorization": "Bearer token-123"}
+
+    edits = '[{"shape_id": 1, "contents": "Updated by test"}]'
+    with open("samples/templates/edit_sample.pptx", "rb") as f:
+        resp = c.post(
+            "/edit",
+            headers=headers,
+            data={"file": (f, "edit_sample.pptx"), "edits": edits},
+            content_type="multipart/form-data",
+        )
+    assert resp.status_code == 202
+    job = resp.get_json()
+    assert job["stage"] == "edit"
+
+    status_body = {}
+    for _ in range(10):
+        status_resp = c.get(job["status_url"], headers=headers)
+        assert status_resp.status_code == 200
+        status_body = status_resp.get_json()
+        if status_body["status"] not in ("pending", "running"):
+            break
+        time.sleep(0.05)
+    assert status_body["status"] == "succeeded"
+    assert "pptx_url" in status_body["artifacts"]
+
+
+def test_edit_rejects_invalid_edits_json_string(monkeypatch, tmp_path):
+    monkeypatch.setenv("PPTX_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("PPTX_OUTPUT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PPTX_API_BEARER_TOKEN", "token-123")
+    app = create_app()
+    c = app.test_client()
+    headers = {"Authorization": "Bearer token-123"}
+
+    with open("samples/templates/edit_sample.pptx", "rb") as f:
+        resp = c.post(
+            "/edit",
+            headers=headers,
+            data={"file": (f, "edit_sample.pptx"), "edits": "not-json"},
+            content_type="multipart/form-data",
+        )
+    assert resp.status_code == 422
+
+
+def test_edit_rejects_non_array_edits_json_string(monkeypatch, tmp_path):
+    monkeypatch.setenv("PPTX_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("PPTX_OUTPUT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PPTX_API_BEARER_TOKEN", "token-123")
+    app = create_app()
+    c = app.test_client()
+    headers = {"Authorization": "Bearer token-123"}
+
+    with open("samples/templates/edit_sample.pptx", "rb") as f:
+        resp = c.post(
+            "/edit",
+            headers=headers,
+            data={"file": (f, "edit_sample.pptx"), "edits": "{}"},
+            content_type="multipart/form-data",
+        )
+    assert resp.status_code == 422
+
+
+def test_edit_rejects_multiple_uploads(monkeypatch, tmp_path):
+    monkeypatch.setenv("PPTX_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("PPTX_OUTPUT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PPTX_API_BEARER_TOKEN", "token-123")
+    app = create_app()
+    c = app.test_client()
+    headers = {"Authorization": "Bearer token-123"}
+
+    with open("samples/templates/edit_sample.pptx", "rb") as f1, open(
+        "samples/templates/edit_sample.pptx", "rb"
+    ) as f2:
+        resp = c.post(
+            "/edit",
+            headers=headers,
+            data={"file": (f1, "edit_sample.pptx"), "file2": (f2, "edit_sample.pptx")},
             content_type="multipart/form-data",
         )
     assert resp.status_code == 422

@@ -8,11 +8,27 @@ from typing import Any, TypeVar, Type
 
 from pydantic import ValidationError
 
-from .models import (ChartOptions, ChartSeries, FontSpec, GenerateReadyDocument,
-                     GenerateReadySlide, JobAuth, JobMeta, JobSpec, Slide,
-                     SlideBullet, SlideBulletGroup, SlideChart, SlideImage,
-                     SlideTable, SlideTextbox, TextCapacity, TextFramePadding,
-                     TextboxParagraph, TextboxPosition)
+from ..models import (
+    ChartOptions,
+    ChartSeries,
+    FontSpec,
+    GenerateReadyDocument,
+    GenerateReadySlide,
+    JobAuth,
+    JobMeta,
+    JobSpec,
+    Slide,
+    SlideBullet,
+    SlideBulletGroup,
+    SlideChart,
+    SlideImage,
+    SlideTable,
+    SlideTextbox,
+    TextCapacity,
+    TextFramePadding,
+    TextboxParagraph,
+    TextboxPosition,
+)
 
 
 def generate_ready_to_jobspec(document: GenerateReadyDocument) -> JobSpec:
@@ -44,12 +60,47 @@ def _build_slide(index: int, slide: GenerateReadySlide) -> Slide:
 
     body_value = elements.get("body")
     if isinstance(body_value, list):
+        # body の各要素を type に応じて処理
         body_bullets: list[SlideBullet] = []
         for entry in body_value:
-            for text_segment, level in _normalize_bullet_value(entry):
-                body_bullets.append(
-                    _create_bullet(slide_id, None, next(bullet_counter), text_segment, level=level)
-                )
+            # dict で type フィールドがあれば type 別処理
+            if isinstance(entry, dict) and "type" in entry:
+                entry_type = entry.get("type")
+                # bullets type: items から箇条書きを抽出
+                if entry_type == "bullets":
+                    items = entry.get("items", [])
+                    for item in items:
+                        for text_segment, level in _normalize_bullet_value(item):
+                            body_bullets.append(
+                                _create_bullet(slide_id, None, next(bullet_counter), text_segment, level=level)
+                            )
+                # paragraph type: text をそのまま使用（bullets には変換しない）
+                elif entry_type == "paragraph":
+                    # paragraph は textbox として扱うか、bullets として扱うか
+                    # ここでは一旦 bullets として扱う（後で textbox 対応も可能）
+                    text = entry.get("text", "")
+                    if text:
+                        for text_segment, level in _normalize_bullet_value(text):
+                            body_bullets.append(
+                                _create_bullet(slide_id, None, next(bullet_counter), text_segment, level=0)
+                            )
+                # table type は後で tables として処理されるのでスキップ
+                elif entry_type == "table":
+                    continue
+                # custom type: text があればそのまま使用
+                else:
+                    text = entry.get("text", "")
+                    if text:
+                        for text_segment, level in _normalize_bullet_value(text):
+                            body_bullets.append(
+                                _create_bullet(slide_id, None, next(bullet_counter), text_segment, level=0)
+                            )
+            else:
+                # 従来の bullets 形式（後方互換性のため）
+                for text_segment, level in _normalize_bullet_value(entry):
+                    body_bullets.append(
+                        _create_bullet(slide_id, None, next(bullet_counter), text_segment, level=level)
+                    )
         if body_bullets:
             bullet_groups.append(SlideBulletGroup(anchor=None, items=body_bullets))
 
@@ -171,20 +222,27 @@ def _create_bullet(
 def _normalize_bullet_value(value: Any) -> list[tuple[str, int]]:
     entries: list[tuple[str, int]] = []
     text: str | None = None
+    has_text = False
     level = 0
     extra_level = None
     if isinstance(value, str):
         text = value.strip()
+        has_text = True
     elif isinstance(value, dict):
-        text = str(value.get("text") or "").strip()
+        if "text" in value:
+            text = str(value.get("text") or "").strip()
+            has_text = True
         extra_level = value.get("level", 0)
-    if not text:
-        return entries
     if extra_level is not None:
         try:
             level = max(int(extra_level), 0)
         except (TypeError, ValueError):
             level = 0
+    if not has_text:
+        return entries
+    if text == "":
+        entries.append(("", level))
+        return entries
     segments = textwrap.wrap(text, width=200, drop_whitespace=True, break_long_words=True)
     if not segments:
         segments = [text]

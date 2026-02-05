@@ -9,15 +9,26 @@ from ...models import (
     ContentSlide,
     DraftSlideCard,
     GenerateReadySlide,
+    JsonPatchOperation,
     MappingAIPatch,
+    MappingLogCapacityWarning,
     MappingCandidate,
     MappingFallbackState,
     MappingLogSlide,
     MappingSlideMeta,
     Slide,
 )
+from ...prepare.models import PrepareCard
+from ..draft_structuring.slide_elements import build_body_blocks
 from ..table_anchor import build_table_payload, is_table_payload, resolve_table_anchor
 from ...utils.usage_tags import normalize_usage_tag_value
+from ...utils.text_lines import split_lines_preserve_blank
+from .llm_fit import (
+    MappingTextFitClient,
+    MappingTextFitClientExecutionError,
+    MappingTextFitResponseFormatError,
+    MappingTextFitRequest,
+)
 from .types import LayoutProfile, MappingAccumulator, MappingOptions, MappingWorkItem
 
 logger = logging.getLogger(__name__)
@@ -31,9 +42,15 @@ class MappingSlideProcessor:
         *,
         options: MappingOptions,
         layout_catalog: Mapping[str, LayoutProfile],
+        prepare_lookup: Mapping[str, PrepareCard] | None = None,
+        text_fit_client: MappingTextFitClient | None = None,
+        text_fit_error: str | None = None,
     ) -> None:
         self.options = options
         self.layout_catalog = layout_catalog
+        self.prepare_lookup = prepare_lookup
+        self.text_fit_client = text_fit_client
+        self.text_fit_error = text_fit_error
 
     def process(
         self,
@@ -58,7 +75,15 @@ class MappingSlideProcessor:
         selected_layout = self._select_layout(default_layout, item.card, candidates)
         selected_profile = self.layout_catalog.get(selected_layout)
 
-        elements = self._build_elements(item.spec_slide, item.content_slide)
+        prepare_card = None
+        if self.prepare_lookup and item.content_slide and item.content_slide.source:
+            source_id = item.content_slide.source.card_id
+            if source_id:
+                prepare_card = self.prepare_lookup.get(source_id)
+        if prepare_card is None and self.prepare_lookup and item.card:
+            prepare_card = self.prepare_lookup.get(item.card.ref_id)
+
+        elements = self._build_elements(item.spec_slide, item.content_slide, prepare_card)
         if item.content_slide and item.content_slide.elements:
             table_payload = self._build_table_payload(
                 item=item,
@@ -71,7 +96,7 @@ class MappingSlideProcessor:
                     payload=table_payload,
                 )
 
-        fallback_state, ai_patches, warnings = self._apply_capacity_controls(
+        fallback_state, ai_patches, warnings, capacity_warnings = self._apply_capacity_controls(
             slide_id=slide_id,
             layout=selected_profile,
             elements=elements,
@@ -115,6 +140,7 @@ class MappingSlideProcessor:
                 fallback=fallback_state,
                 ai_patch=ai_patches,
                 warnings=warnings,
+                capacity_warnings=capacity_warnings,
                 layout_description=layout_description,
             )
         )
@@ -170,7 +196,11 @@ class MappingSlideProcessor:
         )
 
         candidates: list[MappingCandidate] = []
+        seen_layout_ids: set[str] = set()
         for profile in self.layout_catalog.values():
+            if profile.layout_id in seen_layout_ids:
+                continue
+            seen_layout_ids.add(profile.layout_id)
             score = 0.0
             if intent and intent in profile.usage_tags:
                 score += 0.5
@@ -241,9 +271,10 @@ class MappingSlideProcessor:
         self,
         spec_slide: Slide | None,
         content_slide: ContentSlide | None,
+        prepare_card: PrepareCard | None,
     ) -> dict[str, Any]:
         if content_slide is not None and content_slide.elements is not None:
-            base = self._build_elements(spec_slide, None)
+            base = self._build_elements(spec_slide, None, None)
             elements: dict[str, Any] = {
                 "title": content_slide.elements.title,
             }
@@ -255,6 +286,12 @@ class MappingSlideProcessor:
                 elements["body"] = list(content_slide.elements.body)
             elif "body" in base:
                 elements["body"] = base["body"]
+            if prepare_card is not None:
+                structured_blocks, has_non_bullet, has_bullets, has_custom = (
+                    build_body_blocks(prepare_card)
+                )
+                if structured_blocks and (has_custom or (has_non_bullet and has_bullets)):
+                    elements["body"] = structured_blocks
             if content_slide.elements.note:
                 elements["note"] = content_slide.elements.note
             elif "note" in base:
@@ -380,25 +417,249 @@ class MappingSlideProcessor:
         slide_id: str,
         layout: LayoutProfile | None,
         elements: dict[str, Any],
-    ) -> tuple[MappingFallbackState, list[MappingAIPatch], list[str]]:
+    ) -> tuple[
+        MappingFallbackState,
+        list[MappingAIPatch],
+        list[str],
+        list[MappingLogCapacityWarning],
+    ]:
         fallback = MappingFallbackState()
         ai_patches: list[MappingAIPatch] = []
         warnings: list[str] = []
+        capacity_warnings: list[MappingLogCapacityWarning] = []
 
         if layout is None:
-            return fallback, ai_patches, warnings
+            return fallback, ai_patches, warnings, capacity_warnings
 
         max_lines = layout.max_lines()
+        max_chars = layout.max_chars()
         body = elements.get("body")
-        if max_lines is not None and isinstance(body, list) and len(body) > max_lines:
-            warnings.append(
-                f"body が許容行数 {max_lines} を超過しています（現在 {len(body)} 行）"
+        if isinstance(body, list):
+            structured = self._is_structured_body(body)
+            body_lines = self._flatten_structured_body(body) if structured else body
+            actual_lines = len(body_lines)
+            actual_chars = self._count_body_chars(body_lines)
+            overflow_lines = max_lines is not None and actual_lines > max_lines
+            overflow_chars = max_chars is not None and actual_chars > max_chars
+            if overflow_lines or overflow_chars:
+                if overflow_lines:
+                    warnings.append(
+                        "body が許容行数 {max} を超過しているため LLM で調整します（元 {actual} 行）".format(
+                            max=max_lines,
+                            actual=actual_lines,
+                        )
+                    )
+                    capacity_warnings.append(
+                        MappingLogCapacityWarning(
+                            slide_id=slide_id,
+                            element="body",
+                            max_lines=max_lines or 0,
+                            actual_lines=actual_lines,
+                            layout_id=layout.layout_id,
+                        )
+                    )
+                if overflow_chars:
+                    warnings.append(
+                        "body が許容文字数 {max} を超過しているため LLM で調整します（元 {actual} 文字）".format(
+                            max=max_chars,
+                            actual=actual_chars,
+                        )
+                    )
+                if structured:
+                    warnings.append("body が type 付きブロックのため LLM 補正をスキップしました")
+                else:
+                    self._apply_text_fit(
+                        slide_id=slide_id,
+                        layout_id=layout.layout_id,
+                        max_lines=max_lines,
+                        max_chars=max_chars,
+                        elements=elements,
+                        original_body=body,
+                        warnings=warnings,
+                        ai_patches=ai_patches,
+                    )
+
+            updated_body = elements.get("body")
+            if isinstance(updated_body, list) and not updated_body:
+                warnings.append("body が空です")
+
+        return fallback, ai_patches, warnings, capacity_warnings
+
+    def _apply_text_fit(
+        self,
+        *,
+        slide_id: str,
+        layout_id: str | None,
+        max_lines: int | None,
+        max_chars: int | None,
+        elements: dict[str, Any],
+        original_body: list[str],
+        warnings: list[str],
+        ai_patches: list[MappingAIPatch],
+    ) -> None:
+        if self.text_fit_client is None:
+            if self.text_fit_error:
+                warnings.append(
+                    f"LLM 補正をスキップしました（{self.text_fit_error}）"
+                )
+            else:
+                warnings.append("LLM 補正クライアントが未設定のため本文を保持しました")
+            return
+
+        request = MappingTextFitRequest(
+            slide_id=slide_id,
+            layout_id=layout_id,
+            max_lines=max_lines,
+            max_chars=max_chars,
+            body=list(original_body),
+            subtitle=elements.get("subtitle"),
+            note=elements.get("note"),
+        )
+        try:
+            response = self.text_fit_client.fit(request)
+        except (MappingTextFitClientExecutionError, MappingTextFitResponseFormatError) as exc:
+            logger.warning(
+                "mapping text fit failed: slide_id=%s layout=%s error=%s",
+                slide_id,
+                layout_id,
+                exc,
+            )
+            warnings.append("LLM による本文調整に失敗したため本文を保持しました")
+            return
+
+        candidate_body = response.body
+        if not candidate_body and original_body:
+            warnings.append("LLM 出力が空のため適用しませんでした")
+            return
+        if not self._fits_constraints(candidate_body, max_lines, max_chars):
+            warnings.append("LLM 出力が制約を満たさないため適用しませんでした")
+            return
+
+        patch_ops: list[JsonPatchOperation] = []
+        if candidate_body != original_body:
+            elements["body"] = candidate_body
+            patch_ops.append(
+                JsonPatchOperation(
+                    op="replace",
+                    path="/body",
+                    value=candidate_body,
+                )
             )
 
-        if isinstance(body, list) and not body:
-            warnings.append("body が空です")
+        if response.subtitle is not None and response.subtitle != elements.get("subtitle"):
+            elements["subtitle"] = response.subtitle
+            patch_ops.append(
+                JsonPatchOperation(
+                    op="replace",
+                    path="/subtitle",
+                    value=response.subtitle,
+                )
+            )
 
-        return fallback, ai_patches, warnings
+        if response.note is not None and response.note != elements.get("note"):
+            elements["note"] = response.note
+            patch_ops.append(
+                JsonPatchOperation(
+                    op="replace",
+                    path="/note",
+                    value=response.note,
+                )
+            )
+
+        if patch_ops:
+            ai_patches.append(
+                MappingAIPatch(
+                    patch_id=f"mapping-text-fit:{slide_id}",
+                    description="LLM により本文を許容量内に調整",
+                    patch=patch_ops,
+                )
+            )
+
+    @staticmethod
+    def _fits_constraints(
+        body: list[str],
+        max_lines: int | None,
+        max_chars: int | None,
+    ) -> bool:
+        if max_lines is not None and len(body) > max_lines:
+            return False
+        if max_chars is not None and sum(len(line) for line in body) > max_chars:
+            return False
+        return True
+
+    @staticmethod
+    def _count_body_chars(body: list[str]) -> int:
+        return sum(len(line) for line in body)
+
+    @staticmethod
+    def _is_structured_body(body: list[Any]) -> bool:
+        return any(isinstance(item, dict) and "type" in item for item in body)
+
+    @staticmethod
+    def _flatten_structured_body(body: list[Any]) -> list[str]:
+        lines: list[str] = []
+        for entry in body:
+            if isinstance(entry, dict):
+                entry_type = entry.get("type")
+                if entry_type == "bullets":
+                    items = entry.get("items", [])
+                    if isinstance(items, list):
+                        for item in items:
+                            lines.extend(MappingSlideProcessor._flatten_bullet_item(item))
+                    continue
+                if entry_type == "paragraph":
+                    lines.extend(
+                        MappingSlideProcessor._split_text(entry.get("text"), preserve_blank=True)
+                    )
+                    continue
+                if entry_type == "custom":
+                    lines.extend(
+                        MappingSlideProcessor._split_text(entry.get("text"), preserve_blank=True)
+                    )
+                    lines.extend(
+                        MappingSlideProcessor._split_text(entry.get("description"), preserve_blank=True)
+                    )
+                    continue
+                lines.extend(
+                    MappingSlideProcessor._split_text(entry.get("text"), preserve_blank=True)
+                )
+                continue
+            if entry is None:
+                continue
+            lines.append(str(entry))
+        return lines
+
+    @staticmethod
+    def _flatten_bullet_item(item: Any) -> list[str]:
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            if not text:
+                return []
+            level_raw = item.get("level", 0)
+            try:
+                level = max(int(level_raw), 0)
+            except (TypeError, ValueError):
+                level = 0
+            indent = "  " * level
+            return [f"{indent}{text}"]
+        if isinstance(item, str):
+            text = item.strip()
+            return [text] if text else []
+        return []
+
+    @staticmethod
+    def _split_text(value: Any, *, preserve_blank: bool = False) -> list[str]:
+        if not isinstance(value, str):
+            return []
+        segments = split_lines_preserve_blank(value)
+        output: list[str] = []
+        for segment in segments:
+            stripped = segment.strip()
+            if stripped:
+                output.append(stripped)
+            elif preserve_blank:
+                output.append("")
+        return output
 
     @staticmethod
     def _build_auto_draw_payload(spec_slide: Slide | None) -> list[dict[str, float]]:

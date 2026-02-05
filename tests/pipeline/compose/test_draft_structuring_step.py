@@ -26,7 +26,7 @@ from pptx_generator.models import (
     SlideTable,
     TemplateBlueprintSlot,
 )
-from pptx_generator.draft_recommender import LayoutProfile
+from pptx_generator.draft import LayoutProfile
 from pptx_generator.prepare import (
     PrepareBodyBlock,
     PrepareCard,
@@ -439,6 +439,54 @@ def test_assign_slot_table_falls_back_to_lines() -> None:
     DraftStructuringStep._assign_slot_to_elements(elements, slot, card, lines=["項目A"])
 
     assert elements["DataTable"]["rows"] == [["項目A"]]
+
+
+def test_assign_slot_image_prefers_image_block() -> None:
+    card = PrepareCard(
+        card_id="image-card",
+        role=PrepareCardRole(story_phase="solution", intent_tags=[]),
+        content=PrepareCardContent(
+            headline="Image Slide",
+            body=[
+                PrepareBodyBlock(
+                    type="image",
+                    ref="https://example.com/image.png",
+                    description="chart",
+                )
+            ],
+        ),
+    )
+    elements: dict[str, Any] = {}
+    slot = TemplateBlueprintSlot(
+        slot_id="slot",
+        anchor="Body",
+        content_type="image",
+    )
+
+    DraftStructuringStep._assign_slot_to_elements(elements, slot, card, lines=["fallback"])
+
+    assert elements["Body"]["source"] == "https://example.com/image.png"
+
+
+def test_assign_slot_image_falls_back_to_lines() -> None:
+    card = PrepareCard(
+        card_id="image-card",
+        role=PrepareCardRole(story_phase="solution", intent_tags=[]),
+        content=PrepareCardContent(
+            headline="Image Slide",
+            body=[],
+        ),
+    )
+    elements: dict[str, Any] = {}
+    slot = TemplateBlueprintSlot(
+        slot_id="slot",
+        anchor="Body",
+        content_type="image",
+    )
+
+    DraftStructuringStep._assign_slot_to_elements(elements, slot, card, lines=["fallback"])
+
+    assert elements["Body"] == ["fallback"]
 
 
 def test_assign_slot_text_prefers_bullets() -> None:
