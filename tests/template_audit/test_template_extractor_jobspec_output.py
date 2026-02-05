@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -11,7 +12,7 @@ from pptx import Presentation
 
 from pptx_generator.models import (JobSpecScaffold, LayoutInfo, ShapeInfo,
                                    TemplateSpec)
-from pptx_generator.spec_loader import convert_scaffold_to_jobspec
+from pptx_generator.template import convert_scaffold_to_jobspec
 from pptx_generator.pipeline.template_extractor import (
     JOBSPEC_SCHEMA_VERSION,
     SLIDE_BULLET_ANCHORS,
@@ -454,9 +455,8 @@ class TestTemplateExtractor:
                 assert output_path.exists()
                 
                 # ファイル内容確認
-                content = output_path.read_text(encoding="utf-8")
-                assert '"template_path"' in content
-                assert str(temp_template_path) in content
+                payload = json.loads(output_path.read_text(encoding="utf-8"))
+                assert payload["template_path"] == str(temp_template_path)
 
                 jobspec_path = output_path.with_name("jobspec.json")
                 assert jobspec_path.exists()

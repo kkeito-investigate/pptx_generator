@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Sequence
 
 from ..models import TemplateBlueprint, TemplateBlueprintSlide, TemplateBlueprintSlot
+from ..llm.json_utils import extract_json_object
 from .errors import PrepareAIOrchestrationError
 from .client import PrepareLLMClient, PrepareLLMConfigurationError, PrepareLLMResult, create_prepare_llm_client
 from ..prepare.models import (
@@ -258,7 +259,7 @@ class PrepareAIOrchestrator:
         if not text:
             raise PrepareAIOrchestrationError("LLM 応答が空でした")
         try:
-            return json.loads(text)
+            return extract_json_object(text)
         except json.JSONDecodeError as exc:
             logger.warning("LLM 応答の JSON 解析に失敗: %s", exc)
             raise PrepareAIOrchestrationError("LLM 応答を JSON として解析できませんでした") from exc
@@ -417,14 +418,19 @@ class PrepareAIOrchestrator:
             line = entry.strip()
             return {"text": line, "level": 0} if line else None
         if isinstance(entry, dict):
-            line = str(entry.get("text") or "").strip()
-            if not line:
+            # 空行保持: textが空文字列でもlevelが0の場合は保持
+            text_value = entry.get("text")
+            if text_value is None:
                 return None
+            line = str(text_value).strip()
             level_raw = entry.get("level", 0)
             try:
                 level = max(int(level_raw), 0)
             except (TypeError, ValueError):
                 level = 0
+            # 空文字列でlevel=0の場合は空行として保持
+            if not line and level != 0:
+                return None
             bullet_entry: dict[str, Any] = {"text": line, "level": level}
             for key, value in entry.items():
                 if key in {"text", "level"}:
